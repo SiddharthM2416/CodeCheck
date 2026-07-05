@@ -1,0 +1,11 @@
+anthropic
+chromadb
+google-genai
+groq
+mcp
+pytest
+python-dotenv
+sentence-transformers
+streamlit
+tree-sitter-languages
+tree-sitter==0.21.3
