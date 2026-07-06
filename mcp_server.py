@@ -36,16 +36,26 @@ def list_repos() -> list[dict]:
 
 
 @mcp.tool()
-def search_code(query: str, collection_name: str, k: int = 5) -> list[dict]:
+def search_code(
+    query: str,
+    collection_name: str,
+    k: int = 5,
+    path_prefix: str | None = None,
+) -> list[dict]:
     """Semantic search over an indexed codebase. Finds code chunks
     (functions/methods/classes) whose meaning matches the query, even if
     the exact words don't appear in the code. Use this for questions like
     'where is authentication handled?' or 'find the retry logic'.
 
+    Pass path_prefix to scope the search to a subdirectory (e.g.
+    path_prefix='frontend' to only search frontend code) -- use this
+    instead of trying many different keyword phrasings when you already
+    know which part of the repo you're interested in.
+
     Returns a list of chunks, each with: qualified_name, file_path,
     start_line, end_line, kind, language, has_test, code, distance
     (lower distance = more semantically similar)."""
-    return _search_code(query, collection_name, k=k)
+    return _search_code(query, collection_name, k=k, path_prefix=path_prefix)
 
 
 @mcp.tool()

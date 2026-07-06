@@ -63,25 +63,58 @@ def list_indexed_repos() -> list[dict]:
         results.append({
             "collection_name": coll.name,
             "repo_path": coll.metadata.get("repo_path") if coll.metadata else None,
+            # older collections indexed before this field existed won't
+            # have it -- None is handled by the UI as "unknown, can't
+            # check staleness" rather than crashing
+            "indexed_at": coll.metadata.get("indexed_at") if coll.metadata else None,
             "chunk_count": c.count(),
         })
     return results
 
 
-def search_code(query: str, collection_name: str, k: int = 5) -> list[dict]:
-    """Semantic search: embed the query, find the k most similar chunks."""
+def search_code(
+    query: str,
+    collection_name: str,
+    k: int = 5,
+    path_prefix: str | None = None,
+) -> list[dict]:
+    """Semantic search: embed the query, find the k most similar chunks.
+
+    path_prefix (optional) scopes results to files whose path contains
+    this substring, e.g. path_prefix='frontend' to search only frontend
+    code. This was a REAL gap found via testing: without it, an agent
+    trying to search a specific subdirectory (e.g. "find the frontend
+    project component") had no way to scope the search at all, and would
+    burn many tool calls trying different keyword phrasings instead,
+    without ever actually restricting WHICH files got searched --
+    consistently surfacing irrelevant top-k matches from unrelated code.
+
+    Implementation note: when path_prefix is set, we fetch a much larger
+    candidate pool from Chroma BEFORE filtering by path, then trim to k
+    AFTER filtering -- same ordering fix as find_untested's path_prefix
+    bug. Filtering an already-small top-k pool by path would frequently
+    return zero matches even when the target directory has good matches,
+    for the same reason as before."""
     collection = _get_collection(collection_name)
     model = _get_model()
 
     query_embedding = model.encode([query])[0].tolist()
+    query_k = 200 if path_prefix else k
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=k,
+        n_results=query_k,
     )
 
     out = []
     for i in range(len(results["ids"][0])):
+        if len(out) >= k:
+            break
         meta = results["metadatas"][0][i]
+        if path_prefix:
+            normalized_path = meta["file_path"].replace("\\", "/")
+            normalized_prefix = path_prefix.replace("\\", "/")
+            if normalized_prefix not in normalized_path:
+                continue
         out.append({
             "qualified_name": meta["qualified_name"],
             "file_path": meta["file_path"],

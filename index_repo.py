@@ -17,6 +17,7 @@ lingering after code changes).
 
 import os
 import sys
+import time
 import hashlib
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -77,7 +78,7 @@ def index_repo(repo_path: str) -> None:
         pass
     collection = client.create_collection(
         name=coll_name,
-        metadata={"repo_path": repo_path},
+        metadata={"repo_path": repo_path, "indexed_at": time.time()},
     )
 
     print(f"  storing {len(chunks)} chunks in collection '{coll_name}'...")

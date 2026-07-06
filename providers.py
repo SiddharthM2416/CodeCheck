@@ -59,6 +59,33 @@ def is_rate_limit_error(exc: Exception) -> bool:
     return False
 
 
+def is_tool_generation_error(exc: Exception) -> bool:
+    """Detects a DIFFERENT failure mode from rate limiting: the model
+    tried to call a tool but generated invalid/malformed function-call
+    syntax, and the provider rejected it. Real example hit in testing --
+    Groq/Llama produced `<function=search_code [...]}](</function>` (not
+    valid JSON args) and Groq responded with HTTP 400,
+    code='tool_use_failed', message="Failed to call a function. Please
+    adjust your prompt."
+
+    This is NOT a rate-limit condition (retrying won't help on the SAME
+    provider -- the model will likely just malform it again), but
+    switching to a different provider is still the right response, since
+    a different model is very likely to format the same tool call
+    correctly. Treated as a separate, explicit category rather than
+    folded into is_rate_limit_error, since the underlying cause and the
+    error signature are both genuinely different -- keeping them distinct
+    makes the reasoning traceable if a future error needs different
+    handling again."""
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    text = str(exc).lower()
+    if status == 400 and ("tool_use_failed" in text or "failed to call a function" in text):
+        return True
+    if "tool_use_failed" in text:
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Groq (OpenAI-compatible tool-calling format)
 # ---------------------------------------------------------------------------

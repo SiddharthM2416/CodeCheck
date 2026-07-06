@@ -72,6 +72,13 @@ def _is_tested_javascript(name: str, test_corpus: str) -> bool:
         return True
     if re.search(rf"\b{re.escape(name)}\s*\(", test_corpus):
         return True
+    # React Testing Library convention: components are rendered as JSX
+    # tags in tests -- `render(<ProjectCard ... />)` -- which is NOT a
+    # function call and doesn't match the pattern above. Confirmed via
+    # testing this was a real gap: a genuinely-tested component was being
+    # flagged as untested because "<ComponentName" wasn't recognized.
+    if re.search(rf"<{re.escape(name)}\b", test_corpus):
+        return True
     return False
 
 

@@ -24,7 +24,7 @@ from mcp.client.stdio import stdio_client
 
 from providers import (
     mcp_tools_to_groq_format, mcp_tools_to_gemini_format,
-    call_groq, call_gemini, is_rate_limit_error,
+    call_groq, call_gemini, is_rate_limit_error, is_tool_generation_error,
 )
 
 load_dotenv()
@@ -109,7 +109,15 @@ The same grounding discipline applies to writing NEW code: look at how \
 existing similar code in the repo actually does things (imports used, \
 error-handling style, naming conventions, response shape) before writing \
 something new, rather than inventing a plausible-looking pattern that \
-doesn't match the rest of the codebase."""
+doesn't match the rest of the codebase.
+
+If you know which part of the repo is relevant (e.g. "frontend" vs \
+"backend"), use search_code's path_prefix parameter to scope the search \
+directly, rather than trying many different keyword phrasings of the same \
+query -- each tool call costs real API quota, and repeatedly re-searching \
+with slightly different wording rarely finds something a well-scoped \
+search wouldn't have. If your first 2-3 searches haven't found what you \
+need, report that honestly rather than continuing to retry indefinitely."""
 
 
 class ProviderPool:
@@ -165,10 +173,23 @@ class ProviderPool:
                         print(f"  [rate limited on {provider}, switching provider...]", file=sys.stderr)
                     self._current = (self._current + 1) % n
                     continue
-                raise  # non-rate-limit errors surface immediately, no point retrying another provider
+                if is_tool_generation_error(e):
+                    # different root cause than rate-limiting (the model
+                    # malformed a tool call, e.g. Groq/Llama emitting
+                    # `<function=search_code [...]}](</function>` instead
+                    # of valid JSON args) -- but the right response is the
+                    # same: switch provider, since a different model is
+                    # very likely to format the call correctly.
+                    if self.on_event:
+                        self.on_event({"type": "tool_generation_failed", "provider": provider})
+                    else:
+                        print(f"  [tool-call generation failed on {provider}, switching provider...]", file=sys.stderr)
+                    self._current = (self._current + 1) % n
+                    continue
+                raise  # genuinely unrelated errors surface immediately, no point retrying another provider
 
         raise RuntimeError(
-            f"All {n} configured provider(s) are rate-limited. Last error: {last_error}"
+            f"All {n} configured provider(s) failed (rate limits or tool-call errors). Last error: {last_error}"
         )
 
 
@@ -191,6 +212,8 @@ async def run_agent(user_query: str, on_event=None) -> str:
                 print(f"  [tool result] {event['preview']}", file=sys.stderr)
             elif event["type"] == "rate_limited":
                 print(f"  [rate limited on {event['provider']}, switching provider...]", file=sys.stderr)
+            elif event["type"] == "tool_generation_failed":
+                print(f"  [tool-call generation failed on {event['provider']}, switching provider...]", file=sys.stderr)
 
     groq_client = None
     gemini_client = None
@@ -205,43 +228,58 @@ async def run_agent(user_query: str, on_event=None) -> str:
 
     server_params = StdioServerParameters(command="python", args=["mcp_server.py"])
 
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            mcp_tools = (await session.list_tools()).tools
+    try:
+        async with stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                mcp_tools = (await session.list_tools()).tools
 
-            groq_tools = mcp_tools_to_groq_format(mcp_tools) if groq_client else None
-            gemini_tools = mcp_tools_to_gemini_format(mcp_tools) if gemini_client else None
+                groq_tools = mcp_tools_to_groq_format(mcp_tools) if groq_client else None
+                gemini_tools = mcp_tools_to_gemini_format(mcp_tools) if gemini_client else None
 
-            pool = ProviderPool(groq_client, gemini_client, groq_tools, gemini_tools, on_event=emit)
+                pool = ProviderPool(groq_client, gemini_client, groq_tools, gemini_tools, on_event=emit)
 
-            history = [{"role": "user", "text": user_query}]
+                history = [{"role": "user", "text": user_query}]
 
-            while True:
-                response, used_provider = pool.call_with_fallback(SYSTEM_PROMPT, history)
-                emit({"type": "provider", "provider": used_provider})
+                while True:
+                    response, used_provider = pool.call_with_fallback(SYSTEM_PROMPT, history)
+                    emit({"type": "provider", "provider": used_provider})
 
-                if not response.tool_calls:
-                    return response.text or ""
+                    if not response.tool_calls:
+                        return response.text or ""
 
-                history.append({
-                    "role": "assistant",
-                    "text": response.text,
-                    "tool_calls": [{"id": tc.id, "name": tc.name, "input": tc.input} for tc in response.tool_calls],
-                })
-
-                for tc in response.tool_calls:
-                    emit({"type": "tool_call", "name": tc.name, "input": tc.input})
-                    result = await session.call_tool(tc.name, tc.input)
-                    result_text = "".join(c.text for c in result.content if hasattr(c, "text"))
-                    preview = result_text[:300] + ("..." if len(result_text) > 300 else "")
-                    emit({"type": "tool_result", "name": tc.name, "preview": preview, "full": result_text})
                     history.append({
-                        "role": "tool_result",
-                        "tool_call_id": tc.id,
-                        "name": tc.name,
-                        "content": result_text,
+                        "role": "assistant",
+                        "text": response.text,
+                        "tool_calls": [{"id": tc.id, "name": tc.name, "input": tc.input} for tc in response.tool_calls],
                     })
+
+                    for tc in response.tool_calls:
+                        emit({"type": "tool_call", "name": tc.name, "input": tc.input})
+                        result = await session.call_tool(tc.name, tc.input)
+                        result_text = "".join(c.text for c in result.content if hasattr(c, "text"))
+                        preview = result_text[:300] + ("..." if len(result_text) > 300 else "")
+                        emit({"type": "tool_result", "name": tc.name, "preview": preview, "full": result_text})
+                        history.append({
+                            "role": "tool_result",
+                            "tool_call_id": tc.id,
+                            "name": tc.name,
+                            "content": result_text,
+                        })
+    except BaseException as e:
+        # anyio/asyncio wrap exceptions raised inside nested async context
+        # managers (like the two `async with` above) in an opaque
+        # BaseExceptionGroup / "unhandled errors in a TaskGroup" wrapper --
+        # this was a REAL bug found via testing: a RuntimeError with a
+        # perfectly clear message ("All 2 configured provider(s) are
+        # rate-limited...") was getting buried inside that wrapper, so the
+        # person just saw "unhandled errors in a TaskGroup (1 sub-exception)"
+        # with no useful information. Unwrap it here so the real message
+        # actually reaches the caller (CLI print, or app.py's st.error).
+        leaf = e
+        while hasattr(leaf, "exceptions") and leaf.exceptions:
+            leaf = leaf.exceptions[0]
+        raise RuntimeError(f"Agent failed: {leaf}") from leaf
 
 
 if __name__ == "__main__":

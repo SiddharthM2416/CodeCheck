@@ -27,9 +27,11 @@ LANGUAGE_BY_EXT = {
     ".py": "python",
     ".java": "java",
     ".js": "javascript",
-    # ".jsx": "javascript",  # still deferred -- React/JSX component chunking
-    # needs different unit rules (whole-component, not sub-function) per
-    # PROGRESS.md's earlier scope discussion. Plain .js works today.
+    ".jsx": "javascript",  # confirmed working: tree-sitter's javascript
+    # grammar parses JSX natively (no separate grammar needed), and the
+    # existing function/arrow-function extraction rules already produce
+    # correct whole-component chunks, since a React component IS just a
+    # function -- no special-casing was actually needed once tested.
 }
 
 EXTRACTORS = {
@@ -96,6 +98,25 @@ def chunk_repo(repo_root: str) -> list[Chunk]:
             print(f"  [WARN] failed to parse {rel_path}: {e}")
 
     return all_chunks
+
+
+def get_latest_source_mtime(repo_root: str) -> float | None:
+    """Returns the most recent modification time (Unix timestamp) among
+    all source files the walker would actually index -- used to detect
+    whether a repo has changed since it was last indexed. Returns None if
+    no source files are found at all."""
+    source_files, _ = find_source_and_test_files(repo_root)
+    if not source_files:
+        return None
+    latest = 0.0
+    for rel_path in source_files:
+        full_path = os.path.join(repo_root, rel_path)
+        try:
+            mtime = os.path.getmtime(full_path)
+            latest = max(latest, mtime)
+        except OSError:
+            continue
+    return latest
 
 
 if __name__ == "__main__":

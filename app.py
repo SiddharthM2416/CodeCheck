@@ -18,6 +18,7 @@ import streamlit as st
 from retrieval import list_indexed_repos
 from agent_multi import run_agent
 from index_repo import index_repo as run_indexing
+from walker import get_latest_source_mtime
 
 st.set_page_config(page_title="CodeCheck", page_icon="\U0001f50e", layout="wide")
 
@@ -43,27 +44,20 @@ def render_trace(trace: list):
                 st.markdown(f"**Provider:** `{event['provider']}`")
             elif event["type"] == "rate_limited":
                 st.warning(f"Rate limited on `{event['provider']}`, switching provider...")
+            elif event["type"] == "tool_generation_failed":
+                st.warning(f"Tool-call generation failed on `{event['provider']}`, switching provider...")
             elif event["type"] == "tool_call":
                 st.markdown(f"**Tool call:** `{event['name']}({event['input']})`")
             elif event["type"] == "tool_result":
                 st.code(event["preview"], language="json")
 
 
-def get_repo_options() -> dict:
-    """collection_name -> display label, e.g. 'requests (291 chunks)'."""
+def load_repos() -> list[dict]:
     try:
-        repos = list_indexed_repos()
+        return list_indexed_repos()
     except Exception as e:
         st.sidebar.error(f"Could not load indexed repos: {e}")
-        return {}
-    if not repos:
-        return {}
-    options = {}
-    for r in repos:
-        repo_name = r["repo_path"].replace("\\", "/").rstrip("/").split("/")[-1]
-        label = f"{repo_name} ({r['chunk_count']} chunks)"
-        options[r["collection_name"]] = label
-    return options
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +66,12 @@ def get_repo_options() -> dict:
 
 st.sidebar.title("CodeCheck")
 
-repo_options = get_repo_options()
+repos = load_repos()
+repo_by_collection = {r["collection_name"]: r for r in repos}
+repo_options = {
+    r["collection_name"]: f"{r['repo_path'].replace(chr(92), '/').rstrip('/').split('/')[-1]} ({r['chunk_count']} chunks)"
+    for r in repos
+}
 
 with st.sidebar.expander("\u2795 Index a new repo", expanded=not repo_options):
     new_repo_path = st.text_input(
@@ -108,6 +107,39 @@ selected_collection = st.sidebar.selectbox(
     options=list(repo_options.keys()),
     format_func=lambda cid: repo_options[cid],
 )
+
+# --- Staleness check: does the repo have file changes since it was last
+# indexed? Code is NOT automatically re-indexed on change (that would mean
+# re-embedding on every single query -- slow and wasteful) -- instead we
+# detect staleness and offer a one-click re-index button here.
+selected_repo = repo_by_collection[selected_collection]
+repo_path = selected_repo["repo_path"]
+indexed_at = selected_repo.get("indexed_at")
+
+is_stale = False
+if indexed_at is not None and os.path.isdir(repo_path):
+    try:
+        latest_mtime = get_latest_source_mtime(repo_path)
+        if latest_mtime is not None and latest_mtime > indexed_at:
+            is_stale = True
+    except Exception:
+        pass  # staleness check is best-effort; don't block the UI on it
+
+if is_stale:
+    st.sidebar.warning("This repo has changed since it was last indexed.")
+elif indexed_at is None:
+    st.sidebar.caption("(Indexed before staleness tracking was added -- can't check for changes.)")
+
+if st.sidebar.button("\U0001f504 Re-index this repo", type="primary" if is_stale else "secondary"):
+    with st.sidebar:
+        with st.spinner("Re-indexing..."):
+            try:
+                run_indexing(repo_path)
+            except Exception as e:
+                st.error(f"Re-indexing failed: {e}")
+            else:
+                st.success("Re-indexed!")
+                st.rerun()
 
 # ---------------------------------------------------------------------------
 # Main area: two views

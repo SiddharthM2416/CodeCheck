@@ -117,7 +117,15 @@ The same grounding discipline applies to writing NEW code: look at how \
 existing similar code in the repo actually does things (imports used, \
 error-handling style, naming conventions, response shape) before writing \
 something new, rather than inventing a plausible-looking pattern that \
-doesn't match the rest of the codebase."""
+doesn't match the rest of the codebase.
+
+If you know which part of the repo is relevant (e.g. "frontend" vs \
+"backend"), use search_code's path_prefix parameter to scope the search \
+directly, rather than trying many different keyword phrasings of the same \
+query -- each tool call costs real API quota, and repeatedly re-searching \
+with slightly different wording rarely finds something a well-scoped \
+search wouldn't have. If your first 2-3 searches haven't found what you \
+need, report that honestly rather than continuing to retry indefinitely."""
 
 
 def mcp_tool_to_anthropic_format(tool) -> dict:
