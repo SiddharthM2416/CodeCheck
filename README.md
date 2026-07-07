@@ -103,12 +103,6 @@ streamlit run app.py
 ```
 Index new repos directly from the sidebar, scan for gaps with one click, or chat freely — no CLI needed after initial setup.
 
-## Known Limitations
-
-- **Test-linkage is a heuristic, not certainty.** A function is marked "tested" if its name appears in test files (by call, string reference, or JSX tag usage) — this has real false positives (generic names) and false negatives (a function tested only indirectly through another function that calls it).
-- **JS support covers plain `.js` and `.jsx`**, using tree-sitter's JavaScript grammar (which parses JSX natively).
-- **Free-tier LLMs (Groq/Gemini) have a real reasoning-quality ceiling** compared to Claude, particularly for precisely tracing multi-step control flow before asserting test behavior — the system prompt explicitly guards against unverified assertions, but this is a genuine model-capability tradeoff, not fully solved by prompting alone.
-- **No auto-reindexing.** Code changes aren't reflected until you re-run indexing (the UI detects staleness and offers a one-click re-index, but doesn't do it automatically, to avoid re-embedding on every query).
 
 ## Project Structure
 
