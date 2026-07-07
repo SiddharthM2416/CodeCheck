@@ -124,7 +124,3 @@ agent.py                # agent loop (Claude)
 agent_multi.py            # agent loop (Groq/Gemini with fallback)
 app.py                     # Streamlit UI
 ```
-
-## Credits
-
-Built as a weekend project exploring RAG + MCP + agentic AI, with an emphasis on grounding every claim in retrieved code rather than model memory.
